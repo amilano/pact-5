@@ -80,7 +80,7 @@ type Log = ()
 data ServerRuntime
   = ServerRuntime
   { _srDbEnv :: PactDb CoreBuiltin Info
-  , _srRequestCache :: LruHandle RequestKey (CommandResult Hash (PactErrorCompat Info))
+  , _srRequestCache :: LruHandle RequestKey (CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info)))
   , _srSPVSupport :: SPVSupport
   }
 
@@ -95,16 +95,16 @@ instance JE.Encode PollRequest where
   build (PollRequest rks) = JE.object [ "requestKeys" JE..= JE.Array rks ]
 
 newtype PollResponse
-  = PollResponse (HM.HashMap RequestKey (CommandResult Hash (PactErrorCompat Info)))
+  = PollResponse (HM.HashMap RequestKey (CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info))))
   deriving newtype (Eq, Show)
 
 instance JE.Encode PollResponse where
-  build (PollResponse pr) = JE.build $ JL.legacyHashMap requestKeyToB64Text (commandToStableEncoding <$> pr)
+  build (PollResponse pr) = JE.build $ JL.legacyHashMap requestKeyToB64Text pr
 
 instance JD.FromJSON PollResponse where
   parseJSON v = do
     o <- JD.parseJSON v
-    pure $ PollResponse $ commandFromStableEncoding <$> o
+    pure $ PollResponse o
 
 newtype ListenRequest
   = ListenRequest RequestKey
@@ -118,42 +118,42 @@ instance JD.FromJSON ListenRequest where
     ListenRequest <$> o JD..: "listen"
 
 newtype ListenResponse
-  = ListenResponse (CommandResult Hash (PactErrorCompat Info))
+  = ListenResponse (CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info)))
   deriving newtype (Eq, Show)
 
 instance JD.FromJSON ListenResponse where
-  parseJSON v = ListenResponse . commandFromStableEncoding <$> JD.parseJSON v
+  parseJSON v = ListenResponse <$> JD.parseJSON v
 
-commandToStableEncoding
-  :: CommandResult Hash (PactErrorCompat Info)
-  -> CommandResult Hash (PactErrorCompat (StableEncoding Info))
-commandToStableEncoding m = CommandResult
-      { _crReqKey = _crReqKey m
-      , _crTxId = _crTxId m
-      , _crResult = (fmap.fmap) StableEncoding (_crResult m)
-      , _crGas = _crGas m
-      , _crLogs = _crLogs m
-      , _crContinuation = _crContinuation m
-      , _crMetaData = _crMetaData m
-      , _crEvents = _crEvents m
-      }
+-- commandToStableEncoding
+--   :: CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info))
+--   -> CommandResult Hash (PactErrorCompat (StableEncoding Info))
+-- commandToStableEncoding m = CommandResult
+--       { _crReqKey = _crReqKey m
+--       , _crTxId = _crTxId m
+--       , _crResult = (fmap.fmap) StableEncoding (_crResult m)
+--       , _crGas = _crGas m
+--       , _crLogs = _crLogs m
+--       , _crContinuation = _crContinuation m
+--       , _crMetaData = _crMetaData m
+--       , _crEvents = _crEvents m
+--       }
 
-commandFromStableEncoding
-  :: CommandResult Hash (PactErrorCompat (StableEncoding Info))
-  -> CommandResult Hash (PactErrorCompat Info)
-commandFromStableEncoding m = CommandResult
-      { _crReqKey = _crReqKey m
-      , _crTxId = _crTxId m
-      , _crResult = (fmap.fmap) _stableEncoding (_crResult m)
-      , _crGas = _crGas m
-      , _crLogs = _crLogs m
-      , _crContinuation = _crContinuation m
-      , _crMetaData = _crMetaData m
-      , _crEvents = _crEvents m
-      }
+-- commandFromStableEncoding
+--   :: CommandResult Hash (PactErrorCompat (StableEncoding Info))
+--   -> CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info))
+-- commandFromStableEncoding m = CommandResult
+--       { _crReqKey = _crReqKey m
+--       , _crTxId = _crTxId m
+--       , _crResult = (fmap.fmap) _stableEncoding (_crResult m)
+--       , _crGas = _crGas m
+--       , _crLogs = _crLogs m
+--       , _crContinuation = _crContinuation m
+--       , _crMetaData = _crMetaData m
+--       , _crEvents = _crEvents m
+--       }
 
 instance JE.Encode ListenResponse where
-  build (ListenResponse m) = JE.build $ commandToStableEncoding m
+  build (ListenResponse m) = JE.build m
 
 newtype LocalRequest
   = LocalRequest { _localRequest :: Command Text }
@@ -162,16 +162,16 @@ instance JE.Encode LocalRequest where
   build (LocalRequest cmd) = JE.build cmd
 
 newtype LocalResponse
-  = LocalResponse { _localResponse :: CommandResult Hash (PactErrorCompat Info) }
+  = LocalResponse { _localResponse :: CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info)) }
 
 instance JD.FromJSON LocalResponse where
-  parseJSON v = LocalResponse . commandFromStableEncoding <$> JD.parseJSON v
+  parseJSON v = LocalResponse <$> JD.parseJSON v
 
 instance JD.FromJSON LocalRequest where
   parseJSON v = LocalRequest <$> JD.parseJSON v
 
 instance JE.Encode LocalResponse where
-  build (LocalResponse cmdr) = JE.build $ commandToStableEncoding cmdr
+  build (LocalResponse cmdr) = JE.build cmdr
 
 newtype SendRequest
   = SendRequest { _sendRequest :: SubmitBatch }
@@ -206,11 +206,11 @@ runServer (Config port persistDir logDir _verbose _gl) spv = do
   (traverse_.traverse_) (createDirectoryIfMissing True) [persistDir, logDir]
   emptyCache <- newLruHandle 100
   case persistDir of
-    Nothing -> withSqlitePactDb serialisePact_raw_spaninfo ":memory:" $ \pdb -> do
+    Nothing -> withSqlitePactDb serialisePact_lineinfo ":memory:" $ \pdb -> do
       runServer_ (ServerRuntime pdb emptyCache spv) port logDir
     Just pdir -> let
       pdir' = T.pack $ pdir </> "pactdb.sqlite"
-      in withSqlitePactDb serialisePact_raw_spaninfo pdir' $ \pdb -> do
+      in withSqlitePactDb serialisePact_lineinfo pdir' $ \pdb -> do
       runServer_ (ServerRuntime pdb emptyCache spv) port logDir
 
 runServer_ :: ServerRuntime -> Port -> Maybe FilePath -> IO ()
@@ -271,7 +271,7 @@ sendHandler runtime (SendRequest submitBatch) = do
       pure requestKey
     pure $ SendResponse $ RequestKeys requestKeys
    where
-        computeResultAndUpdateState :: RequestKey -> Command Text -> IO (CommandResult Hash (PactErrorCompat Info))
+        computeResultAndUpdateState :: RequestKey -> Command Text -> IO (CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info)))
         computeResultAndUpdateState requestKey cmd =
           case verifyCommand @(StableEncoding PublicMeta) (fmap E.encodeUtf8 cmd) of
             ProcFail errStr -> do
@@ -312,7 +312,7 @@ sendHandler runtime (SendRequest submitBatch) = do
                       pure $ pactErrorToCommandResult requestKey pe (Gas 0)
                     Right evalResult -> pure $ evalResultToCommandResult requestKey evalResult
 
-        evalResultToCommandResult :: RequestKey -> EvalResult -> CommandResult Hash (PactErrorCompat Info)
+        evalResultToCommandResult :: RequestKey -> EvalResult -> CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info))
         evalResultToCommandResult requestKey (EvalResult out logs exec gas _lm txid _lgas ev) =
           CommandResult
           { _crReqKey = requestKey
@@ -324,11 +324,11 @@ sendHandler runtime (SendRequest submitBatch) = do
           , _crContinuation = exec
           , _crMetaData = Nothing
           }
-        pactErrorToCommandResult :: RequestKey -> PactError Info -> Gas -> CommandResult Hash (PactErrorCompat Info)
+        pactErrorToCommandResult :: RequestKey -> PactError Info -> Gas -> CommandResult Hash (PactErrorCompat (LocatedErrorInfo Info))
         pactErrorToCommandResult rk pe gas = CommandResult
           { _crReqKey = rk
           , _crTxId = Nothing
-          , _crResult = PactResultErr $ PEPact5Error $ pactErrorToErrorCode pe
+          , _crResult = PactResultErr $ PEPact5Error $ pactErrorToLocatedErrorCode pe
           , _crGas = gas
           , _crLogs = Nothing
           , _crEvents = [] -- todo
@@ -337,10 +337,10 @@ sendHandler runtime (SendRequest submitBatch) = do
           }
 
   -- TODO: once base-4.19 switch to L.unsnoc
-        evalOutputToCommandResult :: [CompileValue Info] -> PactResult (PactErrorCompat Info)
+        evalOutputToCommandResult :: [CompileValue Info] -> PactResult (PactErrorCompat (LocatedErrorInfo Info))
         evalOutputToCommandResult li = case L.uncons $ L.reverse li of
             Just (v, _) -> PactResultOk (compileValueToPactValue v)
-            Nothing -> PactResultErr $ PEPact5Error $ pactErrorToErrorCode $ PEExecutionError (EvalError "empty input") [] def
+            Nothing -> PactResultErr $ PEPact5Error $ pactErrorToLocatedErrorCode $ PEExecutionError (EvalError "empty input") [] def
 
 localHandler :: ServerRuntime -> LocalRequest -> Handler LocalResponse
 localHandler env (LocalRequest cmd) = do

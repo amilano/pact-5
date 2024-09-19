@@ -143,7 +143,7 @@ data EvalResult = EvalResult
     -- ^ emitted warning
   } deriving stock (Eq, Show)
 
-type Info = SpanInfo
+type Info = LineInfo
 
 setupEvalEnv
   :: PactDb CoreBuiltin a
@@ -345,12 +345,12 @@ evalWithinTx' ee es action =
 
 -- | Runs only compilation pipeline
 compileOnly :: RawCode -> Either (PactError Info) [Lisp.TopLevel Info]
-compileOnly = (Lisp.lexer >=> Lisp.parseProgram) . _rawCode
+compileOnly = bimap (fmap spanInfoToLineInfo) ((fmap.fmap) spanInfoToLineInfo) . (Lisp.lexer >=> Lisp.parseProgram) . _rawCode
 
 -- | Runs only compilation pipeline for a single term
 compileOnlyTerm :: RawCode -> Either (PactError Info) (Lisp.Expr Info)
 compileOnlyTerm =
-  (Lisp.lexer >=> Lisp.parseExpr) . _rawCode
+  bimap (fmap spanInfoToLineInfo) (fmap spanInfoToLineInfo) . (Lisp.lexer >=> Lisp.parseExpr) . _rawCode
 
 
 evalResumePact

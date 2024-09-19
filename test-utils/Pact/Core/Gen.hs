@@ -84,6 +84,11 @@ spanInfoGen =
     <*> Gen.integral Range.constantBounded
     <*> Gen.integral Range.constantBounded
 
+lineInfoGen :: Gen LineInfo
+lineInfoGen =
+  LineInfo
+    <$> Gen.integral Range.constantBounded
+
 capTokenGen :: Gen name -> Gen v -> Gen (CapToken name v)
 capTokenGen n v =
   CapToken <$> n <*> Gen.list (Range.linear 0 10) v

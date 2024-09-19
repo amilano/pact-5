@@ -71,7 +71,7 @@ tests =  withResource
     ]
   where
   mkEnv = do
-    (pdb,db,stmt) <- unsafeCreateSqlitePactDb serialisePact_raw_spaninfo ":memory:"
+    (pdb,db,stmt) <- unsafeCreateSqlitePactDb serialisePact_lineinfo ":memory:"
     cache <- newLruHandle 100
     let
       runtime = ServerRuntime pdb cache noSPVSupport

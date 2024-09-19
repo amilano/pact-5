@@ -188,6 +188,9 @@ module Pact.Core.Errors
  , BoundedText
  , _boundedText
  , mkBoundedText
+ , PactErrorOrigin(..)
+ , LocatedErrorInfo(..)
+ , pactErrorToLocatedErrorCode
  ) where
 
 import Control.Lens hiding (ix)
@@ -1055,6 +1058,47 @@ data PactError info
   | PEVerifierError VerifierError info
   deriving (Eq, Show, Functor, Generic)
 
+data PactErrorOrigin
+  = TopLevelErrorOrigin
+  | FunctionErrorOrigin FullyQualifiedName
+  deriving (Eq, Show)
+
+instance J.Encode PactErrorOrigin where
+  build = \case
+    TopLevelErrorOrigin -> J.text "<toplevel>"
+    FunctionErrorOrigin fqn -> J.build (renderFullyQualName fqn)
+
+instance JD.FromJSON PactErrorOrigin where
+  parseJSON = JD.withText "PactErrorOrigin" $ \case
+    "<toplevel>" -> pure TopLevelErrorOrigin
+    t -> case parseFullyQualifiedName t of
+      Just fqn -> pure (FunctionErrorOrigin fqn)
+      Nothing -> fail "failure parsing pact error origins"
+
+data LocatedErrorInfo info
+  = LocatedErrorInfo
+  { _leiOrigin :: PactErrorOrigin
+  , _leiInfo :: info
+  } deriving (Eq, Show, Functor, Foldable, Traversable)
+
+locatePactErrorInfo :: PactError info -> PactError (LocatedErrorInfo info)
+locatePactErrorInfo pe =
+  case viewErrorStack pe of
+    sf:_ -> fmap (LocatedErrorInfo (FunctionErrorOrigin (_sfName sf))) pe
+    [] -> fmap (LocatedErrorInfo TopLevelErrorOrigin) pe
+
+instance J.Encode info => J.Encode (LocatedErrorInfo info) where
+  build loc = J.object
+    [ "errorOrigin" J..= _leiOrigin loc
+    , "errorInfo" J..= _leiInfo loc
+    ]
+
+instance JD.FromJSON info => JD.FromJSON (LocatedErrorInfo info) where
+  parseJSON = JD.withObject "LocatedErrorInfo" $ \o ->
+    LocatedErrorInfo
+      <$> o JD..: "errorOrigin"
+      <*> o JD..: "errorInfo"
+
 instance NFData info => NFData (PactError info)
 
 instance Pretty (PactError info) where
@@ -1776,6 +1820,8 @@ pactErrorToErrorCode pe = let
     PEUserRecoverableError e _ _ -> constrIndex e
     PEVerifierError e _ -> constrIndex e
 
+pactErrorToLocatedErrorCode :: PactError info -> PactErrorCode (LocatedErrorInfo info)
+pactErrorToLocatedErrorCode = pactErrorToErrorCode . locatePactErrorInfo
 
 data PrettyErrorCode info
   = PrettyErrorCode

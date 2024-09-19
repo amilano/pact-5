@@ -77,7 +77,6 @@ import GHC.Generics
 
 import Pact.Core.Capabilities
 import Pact.Core.ChainData
-import Pact.Core.Compile
 import Pact.Core.DefPacts.Types
 import Pact.Core.Guards
 import Pact.Core.Gas.Types
@@ -90,7 +89,7 @@ import Pact.Core.Signer
 import qualified Pact.Core.Syntax.ParseTree as Lisp
 import Pact.Core.Verifiers
 import Pact.Core.Command.Crypto  as Base
-import Pact.Core.Evaluate (Info)
+import Pact.Core.Evaluate
 
 import qualified Pact.JSON.Decode as JD
 import qualified Pact.JSON.Encode as J
@@ -146,7 +145,7 @@ instance NFData ParsedCode
 
 parsePact :: Text -> Either String ParsedCode
 parsePact t =
-  ParsedCode t <$> first show (parseOnlyProgram t)
+  ParsedCode t <$> first show (compileOnly (RawCode t))
 
 unsafeParseCommand :: forall m. FromJSON m => Command ByteString -> Either String (Command (Payload m ParsedCode))
 unsafeParseCommand = traverse (traverse parsePact <=< A.eitherDecodeStrict' @(Payload m Text))
